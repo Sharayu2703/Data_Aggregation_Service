@@ -1,176 +1,282 @@
-# Ratewise — Real-Time Data Aggregation Service
+# Ratewise – Real-Time Data Aggregation Service
 
-A small, deployable currency reference-rate tracker built with React + Express + MongoDB. It calls two public APIs, persists successful rate snapshots in MongoDB, uses a short in-memory cache for speed, and degrades gracefully when upstreams fail.
+Ratewise is a currency exchange rate tracking application built as part of a full-stack development assessment.
 
-> Rates are indicative reference rates, not executable quotes. Public providers may publish delayed data; this app does not claim tick-level real-time pricing.
+The main purpose of this project is to provide users with reasonably fresh exchange rates and a better experience when public exchange rate APIs are slow or temporarily unavailable.
 
-## Initial thought process
-The first priority is user trust, not the largest number of features. A generic “Unable to fetch rates” message hides whether the provider is down or the data is merely delayed. I chose two independent public sources, concurrent requests, a short cache, and an explicitly labelled stale fallback. The screen puts the observation date and source next to the rates. I kept the first release to one endpoint and one responsive page so the core experience can be shipped and evaluated quickly.
+Instead of depending on only one API response, the backend uses provider integration, caching, and fallback logic to improve reliability.
 
-## Features
-- One backend data endpoint: `GET /api/rates?base=USD&symbols=EUR,GBP,INR`
-- Real upstream requests to Frankfurter and Open ER API (no mocked rates).
-- Parallel provider calls with timeout and per-provider error isolation.
-- Five-minute in-memory cache plus MongoDB persistence; up-to-24-hour stale fallback survives backend restarts.
-- Date-aware provider selection and same-date conflict handling.
-- Responsive React UI with base selection, search, refresh, freshness states, and source attribution.
-- Health endpoint for deployment checks (`GET /health`).
+## 1. Initial Thought Process
 
-## Requirements
-- Node.js 20+
-- npm 9+
-- MongoDB Atlas database (or local MongoDB) for persistent rate snapshots
+When I read the problem statement, I understood that the main problem was user trust.
 
-## Run locally
+Free users may see old exchange rates or errors when public APIs are unavailable. This can make them stop using the application.
 
-### 1. Backend
-```bash
-cd backend
-cp .env.example .env
-# Add your MongoDB connection string to MONGODB_URI in .env
-npm install
-npm run dev
-```
-Backend listens on `http://localhost:4000`.
+I decided to focus on three important things:
 
-### 2. Frontend
-In another terminal:
-```bash
-cd frontend
-cp .env.example .env
-npm install
-npm run dev
-```
-Frontend runs on `http://localhost:5173` and proxies `/api` to the backend in development.
+- Fetching exchange rates from real public APIs.
+- Keeping previously fetched data available through caching.
+- Showing users when the data was last updated.
 
-## Verify
-```bash
-curl "http://localhost:4000/api/rates?base=USD&symbols=EUR,GBP,INR"
-curl "http://localhost:4000/health"
-```
-The rates endpoint returns metadata such as `status`, `asOf`, `fetchedAt`, `source`, `providers`, and `warnings` along with `rates`.
+I wanted to build a simple application that remains useful even when an external provider has a temporary issue.
 
-## MongoDB setup
+## 2. Features
 
-1. Create a free MongoDB Atlas cluster (or use a local MongoDB server).
-2. In Atlas, create a database user and allow your development IP address in Network Access.
-3. Copy the Node.js connection string and place it in `backend/.env` as `MONGODB_URI`.
-4. Replace the username, password, and cluster placeholder. Do not commit `.env` or expose the URI in frontend code.
-5. Restart the backend. The server logs `MongoDB connected` when the connection succeeds.
+- Select a base currency.
+- View multiple currency exchange rates.
+- Fetch data through real public API providers.
+- Backend currency input validation.
+- Provider-based rate fetching.
+- Rate normalization.
+- Five-minute default cache TTL.
+- Stale cached data fallback when providers fail.
+- MongoDB persistent caching.
+- Data freshness information in the frontend.
+- Health check endpoint.
+- Graceful handling of provider failures.
+- Vercel deployment.
 
-### Stored collection
+## 3. Technology Stack
 
-Mongoose creates a `ratecaches` collection using the `RateCache` model. Each document stores:
-- `key`: unique base-currency + sorted-symbols cache key
-- `base` and `symbols`: requested currency pair set
-- `payload`: normalized rates, provider provenance, observation date, and freshness metadata
-- `cachedAt`: last successful fetch timestamp
+| Part | Technology |
+|---|---|
+| Frontend | React |
+| Frontend tooling | Vite |
+| Backend | Node.js |
+| API framework | Express.js |
+| Database | MongoDB |
+| ODM | Mongoose |
+| Deployment | Vercel |
 
-The API checks the in-memory cache first, then MongoDB. Successful provider responses update both caches. If providers fail, the backend can restore a recent MongoDB snapshot and return it with `status: "stale"`. MongoDB is not used as a source of new exchange rates; it stores previously fetched provider results.
+## 4. Project Structure
 
-If `MONGODB_URI` is absent or MongoDB is unreachable, the service logs a warning and continues with in-memory caching. Persistent fallback is unavailable until MongoDB reconnects.
-
-## API contract
-
-`GET /api/rates`
-
-| Query | Default | Rules |
-|---|---|---|
-| `base` | `USD` | Three-letter ISO-style currency code |
-| `symbols` | `EUR,GBP,INR,JPY,CAD,AUD,CHF,CNY` | Comma-separated codes; max 30 |
-
-Success response (shape):
-```json
-{
-  "base": "USD",
-  "asOf": "2026-10-30",
-  "fetchedAt": "2026-11-01T03:55:00.000Z",
-  "status": "fresh",
-  "source": "Frankfurter + Open ER API",
-  "rates": { "EUR": 0.86, "INR": 88.1 },
-  "providers": [
-    { "name": "Frankfurter", "ok": true, "asOf": "2026-10-30" },
-    { "name": "Open ER API", "ok": true, "asOf": "2026-10-30" }
-  ],
-  "warnings": []
-}
-```
-Dates and values above are illustrative response shape only; actual values always come from the live providers.
-
-Status values:
-- `fresh`: observation date is today or yesterday.
-- `delayed`: observation date is older than 24 hours.
-- `stale`: upstreams failed and cached data is being served.
-
-If there is no cached response and all providers fail, the endpoint returns HTTP 503 with an explanatory JSON error. Invalid query parameters return HTTP 400.
-
-## Deploy
-
-### Backend — Render
-1. Push this repository to GitHub.
-2. Create a Render **Web Service** from the repo.
-3. Set **Root Directory** to `backend`.
-4. Build command: `npm install`
-5. Start command: `npm start`
-6. Add `NODE_ENV=production`, `MONGODB_URI` (your Atlas connection string), and `CORS_ORIGIN` (your deployed frontend origin).
-7. After deployment, copy the Render URL.
-
-A `backend/render.yaml` is included as an optional Blueprint config.
-
-### Frontend — Vercel
-1. Import the same GitHub repository into Vercel.
-2. Set **Root Directory** to `frontend`.
-3. Build command: `npm run build`
-4. Output directory: `dist`
-5. Add `VITE_API_BASE_URL=https://YOUR-BACKEND.onrender.com` (replace with your actual Render URL).
-6. Deploy.
-
-For a different frontend host, set the same `VITE_API_BASE_URL` environment variable to the backend origin. Configure `CORS_ORIGIN` on the backend to your deployed frontend origin (or comma-separated origins).
-
-**Deployment note:** I cannot deploy into your hosting accounts or create a public URL without access to those accounts. The included configuration is ready for you to deploy; add the resulting URLs to your submission.
-
-## Environment variables
-
-Backend (`backend/.env`):
-- `PORT` — default `4000`
-- `CORS_ORIGIN` — comma-separated allowed origins; default `http://localhost:5173`
-- `CACHE_TTL_MS` — default `300000` (5 min)
-- `STALE_MAX_AGE_MS` — default `86400000` (24 h)
-- `PROVIDER_TIMEOUT_MS` — default `4000`
-- `MONGODB_URI` — MongoDB connection string; required for persistent cache
-
-Frontend (`frontend/.env`):
-- `VITE_API_BASE_URL` — optional backend origin; omit locally to use Vite proxy.
-
-## Project structure
 ```text
-.
-├── MY_APPROACH.md
-├── decisions.md
-├── README.md
+forex-trust-service/
+│
 ├── backend/
 │   ├── src/
 │   │   ├── providers.js
 │   │   ├── rateCacheModel.js
 │   │   ├── ratesService.js
 │   │   └── server.js
+│   │
 │   ├── test/
-│   │   └── ratesService.test.js
-│   ├── package.json
 │   ├── .env.example
+│   ├── package.json
 │   └── render.yaml
-└── frontend/
-    ├── src/
-    │   ├── App.jsx
-    │   ├── main.jsx
-    │   └── styles.css
-    ├── index.html
-    ├── package.json
-    ├── vite.config.js
-    └── .env.example
+│
+├── frontend/
+│   ├── src/
+│   ├── index.html
+│   ├── package.json
+│   └── vite.config.js
+│
+├── decisions.md
+├── MY_APPROACH.md
+├── README.md
+└── vercel.json
 ```
 
-## Important production caveats
-- The in-memory cache is per process; MongoDB persists the last successful snapshot across restarts. For multi-instance deployments, use Redis for a shared low-latency cache and keep MongoDB for durable snapshots.
-- Public API terms, availability, and publication cadence can change. Verify provider terms before commercial use.
-- This is not a financial advice or transaction-pricing product.
+## 5. How the Application Works
+
+1. The user selects a base currency in the frontend.
+2. The frontend sends a request to the backend.
+3. The backend validates the currency codes.
+4. The rates service checks the available data and providers.
+5. Successful provider data is normalized and cached.
+6. MongoDB stores the cached rate information.
+7. If the providers fail, the service tries to use previously cached data within the allowed stale-data period.
+8. The backend returns the result to the frontend.
+9. The frontend displays the exchange rates and their freshness information.
+
+## 6. API Endpoints
+
+### Get Exchange Rates
+
+**Endpoint:**
+
+```http
+GET /api/rates
+```
+
+**Example request:**
+
+```http
+GET /api/rates?base=USD&symbols=INR,EUR,GBP
+```
+
+**Query parameters:**
+
+| Parameter | Description |
+|---|---|
+| base | Base currency code |
+| symbols | Comma-separated target currency codes |
+
+The backend accepts one to thirty valid currency symbols. The base currency cannot also be included in the symbols.
+
+### Health Check
+
+```http
+GET /health
+```
+
+This endpoint returns the backend service status and indicates whether MongoDB is configured.
+
+## 7. Caching Strategy
+
+The application uses caching to reduce repeated requests to external providers.
+
+Current configuration:
+
+- Cache TTL: 5 minutes by default.
+- Maximum stale-data age: 24 hours by default.
+- Provider timeout: 4 seconds by default.
+
+When a provider fails, the backend can return previously cached data if it is still within the allowed stale-data period.
+
+If no usable data is available, the backend returns an error response instead of pretending that fresh rates are available.
+
+## 8. Run the Project Locally
+
+### Requirements
+
+- Node.js 20 or above.
+- npm.
+- MongoDB connection (optional, but recommended for persistent caching).
+
+### Step 1: Clone the repository
+
+```bash
+git clone https://github.com/Sharayu2703/Data_Aggregation_Service
+cd forex-trust-service
+```
+
+Replace the repository URL with the actual GitHub repository URL.
+
+### Step 2: Install backend dependencies
+
+```bash
+npm install --prefix backend
+```
+
+### Step 3: Configure backend environment
+
+Create a `.env` file inside the `backend` folder using `.env.example` as a reference.
+
+Add the required provider configuration and database connection details according to the example environment file.
+
+Common configuration variables include:
+
+```env
+PORT=4000
+MONGODB_URI=your_mongodb_connection_string
+CORS_ORIGIN=http://localhost:5173
+CACHE_TTL_MS=300000
+STALE_MAX_AGE_MS=86400000
+PROVIDER_TIMEOUT_MS=4000
+```
+
+Use the actual provider variables documented in `backend/.env.example`. Do not commit secret API keys or `.env` files to GitHub.
+
+### Step 4: Start the backend
+
+```bash
+npm run dev --prefix backend
+```
+
+The backend runs locally on:
+
+```text
+http://localhost:4000
+```
+
+### Step 5: Install frontend dependencies
+
+Open another terminal in the project root and run:
+
+```bash
+npm install --prefix frontend
+```
+
+### Step 6: Start the frontend
+
+```bash
+npm run dev --prefix frontend
+```
+
+The frontend runs locally on:
+
+```text
+http://localhost:5173
+```
+
+The Vite development server proxies API requests to the backend.
+
+## 9. Run Tests
+
+To run backend tests:
+
+```bash
+npm test --prefix backend
+```
+
+The backend tests cover:
+
+- Selecting the newest observation date.
+- Returning stale cached data when providers fail.
+- Handling cases where no provider or cache is available.
+- Saving and restoring data through the database store.
+- Using MongoDB-persisted data as a stale fallback.
+
+## 10. Production Build
+
+To create a frontend production build:
+
+```bash
+npm run build --prefix frontend
+```
+
+## 11. Deployment
+
+The application is deployed using Vercel.
+
+The root `vercel.json` configures the frontend and backend as services in one Vercel project.
+
+The routing is configured so that:
+
+- `/api/*` requests go to the backend.
+- `/health` requests go to the backend.
+- Other application routes go to the frontend.
+
+Required environment variables should be configured in the Vercel project settings. Never upload secrets to the repository.
+
+## 12. Limitations
+
+This is a time-limited assessment project.
+
+The following features are not implemented:
+
+- Paid subscription system.
+- Premium API integration.
+- User authentication.
+- Historical rate charts.
+- Advanced monitoring and analytics.
+
+These features can be added in future versions.
+
+## 13. Future Improvements
+
+- Add historical rate tracking.
+- Add provider performance monitoring.
+- Improve API failure alerts.
+- Add more public data providers.
+- Add a premium API strategy for high-intent users.
+- Improve the user dashboard.
+
+## 14. Conclusion
+
+Ratewise was built with a focus on reliability, caching, and user trust.
+
+The main idea is simple: when fresh data is temporarily unavailable, the application should try to provide usable cached data and clearly communicate its freshness instead of immediately showing an error.
+
+This project helped me understand how external APIs, backend services, caching, databases, and frontend applications work together in a real-world scenario.
